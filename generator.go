@@ -104,36 +104,26 @@ func (g *Generator) AccessFunc(typ *ast.TypeSpec, field *ast.Field, imp []*ast.I
 
 	fieldName, fieldKey := g.fieldNames(field)
 
-	fieldTypeName, fieldTypePkg, err := g.qualify(field.Type, imp)
-	if err != nil {
-		panic(fmt.Sprintf("could not qualify type for field %s", fieldName))
-	}
-
 	g.file.Commentf(
 		"%s returns the value of the '%s' field.",
 		fieldName,
 		fieldKey,
 	)
 	g.file.Func().
-		Params(jen.Id("p").Id(g.opts.TypePrefix+typ.Name.Name)).
+		Params(jen.Id("p").Id(g.opts.TypePrefix + typ.Name.Name)).
 		Id(fieldName).
 		Params().
-		Qual(fieldTypePkg, fieldTypeName).
+		Add(g.determineType(field.Type, imp)).
 		BlockFunc(func(bg *jen.Group) {
 			bg.Return(jen.Id("p").
 				Index(jen.Lit(fieldKey))).
-				Assert(jen.Qual(fieldTypePkg, fieldTypeName))
+				Assert(g.determineType(field.Type, imp))
 		})
 }
 
 // WithFunc generates the code for the function used to update a field.
 func (g *Generator) WithFunc(typ *ast.TypeSpec, field *ast.Field, imp []*ast.ImportSpec) {
 	fieldName, fieldKey := g.fieldNames(field)
-
-	fieldTypeName, fieldTypePkg, err := g.qualify(field.Type, imp)
-	if err != nil {
-		panic(fmt.Sprintf("could not qualify type for field %s", fieldName))
-	}
 
 	g.file.Commentf(
 		"With%s updates p with the given v and returns p again.",
@@ -143,7 +133,7 @@ func (g *Generator) WithFunc(typ *ast.TypeSpec, field *ast.Field, imp []*ast.Imp
 		Params(jen.Id("p").Id(g.opts.TypePrefix + typ.Name.Name)).
 		Id("With" + fieldName).
 		ParamsFunc(func(pg *jen.Group) {
-			pg.Id("v").Qual(fieldTypePkg, fieldTypeName)
+			pg.Id("v").Add(g.determineType(field.Type, imp))
 		}).
 		Id(g.opts.TypePrefix + typ.Name.Name).
 		BlockFunc(func(fg *jen.Group) {
@@ -177,6 +167,34 @@ func (g *Generator) fieldNames(field *ast.Field) (fieldName, fieldKey string) {
 	return field.Names[0].Name, field.Names[0].Name
 }
 
+func (g *Generator) determineType(typ ast.Expr, imp []*ast.ImportSpec) jen.Code {
+	switch x := typ.(type) {
+	case *ast.Ident:
+		return jen.Id(x.Name)
+
+	case *ast.SelectorExpr:
+		fieldTypeName, fieldTypePkg, err := g.qualify(x, imp)
+		if err != nil {
+			panic("could not qualify type: " + err.Error())
+		}
+		return jen.Qual(fieldTypePkg, fieldTypeName)
+
+	case *ast.MapType:
+		key := g.determineType(x.Key, imp)
+		value := g.determineType(x.Value, imp)
+		return jen.Map(key).Add(value)
+
+	case *ast.ArrayType:
+		return jen.Index().Add(g.determineType(x.Elt, imp))
+
+	case *ast.StarExpr:
+		return jen.Op("*").Add(g.determineType(x.X, imp))
+
+	default:
+		panic(fmt.Sprintf("unsupported type %T", x))
+	}
+}
+
 // qualify resolves the type of the given expression and returns the name of
 // the type and the package it is defined in.
 //
@@ -184,30 +202,21 @@ func (g *Generator) fieldNames(field *ast.Field) (fieldName, fieldKey string) {
 // "particle.Generator", the function returns "Generator" and
 // "github.com/lukasl-dev/particle".
 func (g *Generator) qualify(
-	expr ast.Expr,
+	expr *ast.SelectorExpr,
 	imports []*ast.ImportSpec,
 ) (name, pkg string, err error) {
-	switch x := (expr).(type) {
-	case *ast.Ident:
-		return x.Name, "", nil
+	pkgName := expr.X.(*ast.Ident).Name
 
-	case *ast.SelectorExpr:
-		pkgName := x.X.(*ast.Ident).Name
+	for _, imp := range imports {
+		path := strings.Trim(imp.Path.Value, "\"")
 
-		for _, imp := range imports {
-			path := strings.Trim(imp.Path.Value, "\"")
+		split := strings.Split(path, "/")
+		last := split[len(split)-1]
 
-			split := strings.Split(path, "/")
-			last := split[len(split)-1]
-
-			if last == pkgName || (imp.Name != nil && imp.Name.Name == pkgName) {
-				return x.Sel.Name, path, nil
-			}
+		if last == pkgName || (imp.Name != nil && imp.Name.Name == pkgName) {
+			return expr.Sel.Name, path, nil
 		}
-
-		return "", "", errors.New("could not find import")
-
-	default:
-		return "", "", errors.New("unexpected type")
 	}
+
+	return "", "", errors.New("could not find import")
 }
