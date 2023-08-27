@@ -115,10 +115,10 @@ func (g *Generator) AccessFunc(typ *ast.TypeSpec, field *ast.Field, imp []*ast.I
 		fieldKey,
 	)
 	g.file.Func().
-		Params(jen.Id("p").Id(g.opts.TypePrefix + typ.Name.Name)).
+		Params(jen.Id("p").Id(g.opts.TypePrefix+typ.Name.Name)).
 		Id(fieldName).
 		Params().
-		String().
+		Qual(fieldTypePkg, fieldTypeName).
 		BlockFunc(func(bg *jen.Group) {
 			bg.Return(jen.Id("p").
 				Index(jen.Lit(fieldKey))).
